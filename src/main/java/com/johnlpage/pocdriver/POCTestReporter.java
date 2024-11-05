@@ -4,6 +4,8 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import org.bson.Document;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -13,18 +15,14 @@ import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class POCTestReporter implements Runnable {
-    private POCTestResults testResults;
-    private MongoClient mongoClient;
-            
-    private POCTestOptions testOpts;
-    Logger logger;
-
     private static final DateFormat DF_FULL = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     private static final DateFormat DF_TIME = new SimpleDateFormat("HH:mm:ss");
+    private final POCTestResults testResults;
+    private final MongoClient mongoClient;
+    private final POCTestOptions testOpts;
+    Logger logger;
 
     POCTestReporter(POCTestResults r, MongoClient mc, POCTestOptions t) {
         mongoClient = mc;
@@ -80,8 +78,8 @@ public class POCTestReporter implements Runnable {
 
             Long opsDone = testResults.GetOpsDone(o);
 
-            for(int i=0;i< testOpts.slowThresholds.length;i++){
-                int slowThreshold  =  testOpts.slowThresholds[i];
+            for (int i = 0; i < testOpts.slowThresholds.length; i++) {
+                int slowThreshold = testOpts.slowThresholds[i];
                 if (opsDone > 0) {
                     Double fastops = 100 - (testResults.GetSlowOps(o, i) * 100.0)
                             / opsDone;
@@ -98,10 +96,10 @@ public class POCTestReporter implements Runnable {
                         outfile.format(",%d", 100);
                     }
                 }
-                
+
             }
-            if(outfile != null) outfile.format(",");
-            
+            if (outfile != null) outfile.format(",");
+
             System.out.println();
 
         }
@@ -137,7 +135,7 @@ public class POCTestReporter implements Runnable {
 
             Long opsDone = testResults.GetOpsDone(o);
 
-            System.out.format("%d %s per second on average", (int)(1f * opsDone / secondsElapsed), o);
+            System.out.format("%d %s per second on average", (int) (1f * opsDone / secondsElapsed), o);
             System.out.println();
 
         }

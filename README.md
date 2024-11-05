@@ -16,7 +16,7 @@ Also be wary of batches, and mixing finds (which cannot be batched) with writes 
 Note there is an extra flag `--opsratio` which enables the previous behaviour. Also if using `--zipfian` this new behaviour does not apply.
 
 ***NOTE***
-Recently upgraded to [MongoDB 4.1.x Java Driver](http://mongodb.github.io/mongo-java-driver/4.1/).
+Recently upgraded to [MongoDB 4.11.x Java Driver](https://www.mongodb.com/docs/drivers/java/sync/v4.11/).
 
 ## Introduction
 
@@ -41,16 +41,20 @@ POCDriver is an alternative to using generic tools like YCSB. Unlike these tools
 
 ## Build
 
+To build the project, you need to have Gradle 8.10.x installed.
+
+Java 11 or higher is required to build and run POCDriver.
+
 Execute:
 
 ```bash
-mvn clean package
+gradle clean build
 ```
 
-and you will find `POCDriver.jar` in `bin` folder. You can execute this program by running,
+and you will find `POCDriver.jar` in `build` folder. You can execute this program by running,
 
 ```bash
-java -jar ./bin/POCDriver.jar
+java -jar ./build/lib/POCDriver.jar
 ```
 
 Then append the flags and arguments you want to this command, which can be found specified below. 

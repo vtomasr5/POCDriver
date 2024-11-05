@@ -1,6 +1,5 @@
 package com.johnlpage.pocdriver;
 
-
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
@@ -10,10 +9,10 @@ import org.bson.BsonBinaryWriter;
 import org.bson.codecs.DocumentCodec;
 import org.bson.codecs.EncoderContext;
 import org.bson.io.BasicOutputBuffer;
-
-import java.util.logging.LogManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.logging.LogManager;
 
 public class POCDriver {
 
@@ -23,7 +22,7 @@ public class POCDriver {
         LogManager.getLogManager().reset();
         Logger logger = LoggerFactory.getLogger(POCDriver.class);
 
-        logger.info("MongoDB Proof Of Concept  - Load Generator version 0.1.2");
+        logger.info("MongoDB Proof Of Concept - Load Generator");
         try {
             testOpts = new POCTestOptions(args);
             // Quit after displaying help message
@@ -60,10 +59,24 @@ public class POCDriver {
                 1, 12345678, testOpts.NUMBER_SIZE, arr, testOpts.blobSize, testOpts.locationCodes);
         //System.out.println(tr);
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
-        JsonParser jp = new JsonParser();
-        JsonElement je = jp.parse(tr.internalDoc.toJson());
+        JsonElement je = JsonParser.parseString(tr.internalDoc.toJson());
 
         String json = gson.toJson(je);
+        StringBuilder newJson = getStringBuilder(json);
+
+        //This is actual output not logging 
+        System.out.println(newJson);
+
+        //Thanks to Ross Lawley for this bit of black magic
+        BasicOutputBuffer buffer = new BasicOutputBuffer();
+        BsonBinaryWriter binaryWriter = new BsonBinaryWriter(buffer);
+        new DocumentCodec().encode(binaryWriter, tr.internalDoc, EncoderContext.builder().build());
+        int length = binaryWriter.getBsonOutput().getSize();
+
+        System.out.printf("Documents are %.2f KB each as BSON%n", (float) length / 1024);
+    }
+
+    private static StringBuilder getStringBuilder(String json) {
         StringBuilder newJson = new StringBuilder();
         int arrays = 0;
 
@@ -89,17 +102,7 @@ public class POCDriver {
             }
             newJson.append(json.charAt(c));
         }
-
-        //This is actual output not logging 
-        System.out.println(newJson.toString());
-
-        //Thanks to Ross Lawley for this bit of black magic
-        BasicOutputBuffer buffer = new BasicOutputBuffer();
-        BsonBinaryWriter binaryWriter = new BsonBinaryWriter(buffer);
-        new DocumentCodec().encode(binaryWriter, tr.internalDoc, EncoderContext.builder().build());
-        int length = binaryWriter.getBsonOutput().getSize();
-
-        System.out.println(String.format("Documents are %.2f KB each as BSON", (float) length / 1024));
+        return newJson;
     }
 
 }

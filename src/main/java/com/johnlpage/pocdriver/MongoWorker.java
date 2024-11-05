@@ -1,7 +1,7 @@
 package com.johnlpage.pocdriver;
 
-import com.mongodb.client.MongoClient;
 import com.mongodb.bulk.BulkWriteResult;
+import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
@@ -11,33 +11,32 @@ import com.mongodb.client.model.UpdateManyModel;
 import com.mongodb.client.model.WriteModel;
 import org.apache.commons.math3.distribution.ZipfDistribution;
 import org.bson.Document;
-import java.time.ZonedDateTime;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Random;
+import java.time.ZonedDateTime;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static com.mongodb.client.model.Projections.fields;
 import static com.mongodb.client.model.Projections.include;
 import static com.mongodb.client.model.Sorts.descending;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class MongoWorker implements Runnable {
 
-    private MongoClient mongoClient;
+    private final MongoClient mongoClient;
+    private final POCTestOptions testOpts;
+    private final POCTestResults testResults;
+    private final int workerID;
+    private final Random rng;
+    private final int maxCollections;
+    private final BulkWriteOptions bulkOptions = new BulkWriteOptions();
+    Logger logger;
     private MongoCollection<Document> coll;
     private ArrayList<MongoCollection<Document>> colls;
-    private POCTestOptions testOpts;
-    private POCTestResults testResults;
-    private int workerID;
     private int sequence;
     private int numShards = 0;
-    private Random rng;
     private ZipfDistribution zipf;
     private boolean workflowed = false;
     private boolean zipfian = false;
@@ -45,12 +44,47 @@ public class MongoWorker implements Runnable {
     private int workflowStep = 0;
     private ArrayList<Document> keyStack;
     private int lastCollection;
-    private int maxCollections;
 
-    private BulkWriteOptions bulkOptions = new BulkWriteOptions();
+    MongoWorker(MongoClient c, POCTestOptions t, POCTestResults r, int id) {
+        mongoClient = c;
+        logger = LoggerFactory.getLogger(MongoWorker.class);
+        // Ping
+        c.getDatabase("admin").runCommand(new Document("ping", 1));
+        testOpts = t;
+        testResults = r;
+        workerID = id;
+        MongoDatabase db = mongoClient.getDatabase(testOpts.databaseName);
+        maxCollections = testOpts.numcollections;
+        String baseCollectionName = testOpts.collectionName;
+        if (maxCollections > 1) {
+            colls = new ArrayList<>();
+            lastCollection = 0;
+            for (int i = 0; i < maxCollections; i++) {
+                String str = baseCollectionName + i;
+                colls.add(db.getCollection(str));
+            }
+        } else {
+            coll = db.getCollection(baseCollectionName);
+        }
 
-    Logger logger;
+        // id
+        sequence = getHighestID();
 
+        ReviewShards();
+        rng = new Random();
+        if (testOpts.zipfian) {
+            zipfian = true;
+            zipf = new ZipfDistribution(testOpts.zipfsize, 0.99);
+        }
+
+        if (testOpts.workflow != null) {
+            workflow = testOpts.workflow;
+            workflowed = true;
+            keyStack = new ArrayList<>();
+        }
+        bulkOptions.ordered(testOpts.orderedBatch);
+
+    }
 
     private void ReviewShards() {
         String primaryShard = null;
@@ -58,7 +92,7 @@ public class MongoWorker implements Runnable {
         logger.debug("Reviewing chunk distribution");
         if (testOpts.sharded && !testOpts.singleserver) {
             // I'd like to pick a shard and write there - it's going to be
-            // faster and
+            // faster and,
             // We can ensure we distribute our workers over out shards
             // So we will tell mongo that's where we want our records to go
             logger.debug("Sharded and not a single server");
@@ -69,15 +103,15 @@ public class MongoWorker implements Runnable {
             if (dbinfo != null) {
                 primaryShard = dbinfo.getString("primary");
             }
-            logger.debug("Primary shard is " + primaryShard);
+            logger.debug("Primary shard is {}", primaryShard);
 
             MongoDatabase admindb = mongoClient.getDatabase("admin");
-            Boolean split = false;
+            boolean split = false;
 
             while (!split) {
 
                 try {
-                    logger.debug("Splitting a chunk for worker " + workerID);
+                    logger.debug("Splitting a chunk for worker {}", workerID);
                     admindb.runCommand(new Document("split", testOpts.databaseName + "." + testOpts.collectionName)
                             .append("middle",
                                     new Document("_id", new Document("w", workerID).append("i", sequence + 1))));
@@ -110,20 +144,18 @@ public class MongoWorker implements Runnable {
             int shardno = workerID % testOpts.numShards;
             // Get the name of the shard
 
-            MongoCursor<Document> shardlist = mongoClient.getDatabase("config").getCollection("shards").find()
-                    .skip(shardno).limit(1).iterator();
-
             logger.debug("Getting shard name");
 
             Document obj = mongoClient.getDatabase("config").getCollection("shards").find().skip(shardno).first();
 
+            assert obj != null;
             String shardName = obj.getString("_id");
 
             boolean move = false;
 
             while (!move) {
                 try {
-                    logger.debug("Moving chunk for worker " + workerID + " to " + shardName);
+                    logger.debug("Moving chunk for worker {} to {}", workerID, shardName);
                     admindb.runCommand(new Document("moveChunk", testOpts.databaseName + "." + testOpts.collectionName)
                             .append("find", new Document("_id", new Document("w", workerID).append("i", sequence + 1)))
                             .append("to", shardName).append("_secondaryThrottle", true).append("_waitForDelete", true)
@@ -134,7 +166,7 @@ public class MongoWorker implements Runnable {
                     if (e.getMessage().contains("that chunk is already on that shard")) {
                         move = true;
                     } else {
-                        logger.warn("MOVE CHUNK ERROR: " + e.getMessage());
+                        logger.warn("MOVE CHUNK ERROR: {}", e.getMessage());
                         try {
                             logger.warn("Sleeping before trying again");
                             Thread.sleep(1000);
@@ -146,50 +178,9 @@ public class MongoWorker implements Runnable {
 
             }
 
-            logger.debug("Moved {w:" + workerID + ",i:" + (sequence + 1) + "} to " + shardName);
+            logger.debug("Moved {w:{},i:{}} to {}", workerID, sequence + 1, shardName);
             numShards = testOpts.numShards;
         }
-    }
-
-    MongoWorker(MongoClient c, POCTestOptions t, POCTestResults r, int id) {
-        mongoClient = c;
-        logger = LoggerFactory.getLogger(MongoWorker.class);
-        // Ping
-        c.getDatabase("admin").runCommand(new Document("ping", 1));
-        testOpts = t;
-        testResults = r;
-        workerID = id;
-        MongoDatabase db = mongoClient.getDatabase(testOpts.databaseName);
-        maxCollections = testOpts.numcollections;
-        String baseCollectionName = testOpts.collectionName;
-        if (maxCollections > 1) {
-            colls = new ArrayList<MongoCollection<Document>>();
-            lastCollection = 0;
-            for (int i = 0; i < maxCollections; i++) {
-                String str = baseCollectionName + i;
-                colls.add(db.getCollection(str));
-            }
-        } else {
-            coll = db.getCollection(baseCollectionName);
-        }
-
-        // id
-        sequence = getHighestID();
-
-        ReviewShards();
-        rng = new Random();
-        if (testOpts.zipfian) {
-            zipfian = true;
-            zipf = new ZipfDistribution(testOpts.zipfsize, 0.99);
-        }
-
-        if (testOpts.workflow != null) {
-            workflow = testOpts.workflow;
-            workflowed = true;
-            keyStack = new ArrayList<Document>();
-        }
-        bulkOptions.ordered(testOpts.orderedBatch);
-
     }
 
     private int getNextVal(int mult) {
@@ -201,12 +192,14 @@ public class MongoWorker implements Runnable {
                 rval = (int) Math.abs(Math.floor(rng.nextDouble() * mult));
             } else {
                 // What operation we do depends on the time so we take a fairly
-                // time and mod it with multi , if we use nanosecnods then this wont work
+                // time and mod it with multi , if we use nanosecnods then this won't work
                 // Seconds is way too large althoughwe coudl scale it
                 // milliseonds might be OK but then 1:1 is not 100:100 so we need to be a bit
                 // smarter
                 long now = ZonedDateTime.now().toInstant().toEpochMilli();
-		if(mult ==0) { mult=1; }
+                if (mult == 0) {
+                    mult = 1;
+                }
                 rval = (int) (now % mult);
 
             }
@@ -251,7 +244,7 @@ public class MongoWorker implements Runnable {
         while (!submitted && !bulkWriter.isEmpty()) { // can be empty if we removed a Dupe key error
             try {
                 submitted = true;
-                bwResult = coll.bulkWrite(bulkWriter,bulkOptions);
+                bwResult = coll.bulkWrite(bulkWriter, bulkOptions);
             } catch (Exception e) {
                 // We had a problem with this bulk op - some may be completed, some may not
 
@@ -266,9 +259,9 @@ public class MongoWorker implements Runnable {
                     logger.debug("Duplicate Key");
                     int thread = Integer.parseInt(m.group(1));
                     int uniqid = Integer.parseInt(m.group(2));
-                    logger.debug(" ID = " + thread + " " + uniqid);
+                    logger.debug(" ID = {} {}", thread, uniqid);
                     boolean found = false;
-                    for (Iterator<? super WriteModel<Document>> iter = bulkWriter.listIterator(); iter.hasNext();) {
+                    for (Iterator<? super WriteModel<Document>> iter = bulkWriter.listIterator(); iter.hasNext(); ) {
                         // Check if it's a InsertOneModel
 
                         Object o = iter.next();
@@ -277,12 +270,8 @@ public class MongoWorker implements Runnable {
                             InsertOneModel<Document> a = (InsertOneModel<Document>) o;
                             Document id = (Document) a.getDocument().get("_id");
 
-                            int opthread = id.getInteger("w");
-                            int opid = id.getInteger("i");
-
                             if (id.getInteger("i") == uniqid) {
-                                logger.debug(
-                                        " Removing " + thread + " " + uniqid + " from bulkop as" + " already inserted");
+                                logger.debug(" Removing {} {} from bulkop as already inserted", thread, uniqid);
                                 iter.remove();
                                 found = true;
                             }
@@ -294,7 +283,7 @@ public class MongoWorker implements Runnable {
                 } else {
                     // Some other error occurred - possibly MongoCommandException,
                     // MongoTimeoutException
-                    logger.warn(e.getClass().getSimpleName() + ": " + error);
+                    logger.warn("{}: {}", e.getClass().getSimpleName(), error);
                     // Print a full stacktrace since we're in debug mode
                     if (testOpts.debug)
                         e.printStackTrace();
@@ -308,6 +297,7 @@ public class MongoWorker implements Runnable {
 
         Long taken = endtime.getTime() - starttime.getTime();
 
+        assert bwResult != null;
         int icount = bwResult.getInsertedCount();
         int ucount = bwResult.getMatchedCount();
 
@@ -331,13 +321,12 @@ public class MongoWorker implements Runnable {
         query.append("_id", new Document("w", workerID).append("i", recordno));
         Date starttime = new Date();
         Document myDoc;
-        List<String> projFields = new ArrayList<String>(testOpts.numFields);
+        List<String> projFields = new ArrayList<>(testOpts.numFields);
 
         if (testOpts.projectFields == 0) {
             myDoc = coll.find(query).first();
         } else {
-            int numProjFields = (testOpts.projectFields <= testOpts.numFields) ? testOpts.projectFields
-                    : testOpts.numFields;
+            int numProjFields = Math.min(testOpts.projectFields, testOpts.numFields);
             int i = 0;
             while (i < numProjFields) {
                 projFields.add("fld" + i);
@@ -356,7 +345,7 @@ public class MongoWorker implements Runnable {
         return myDoc;
     }
 
-        private Document simpleGetKey() {
+    private Document simpleGetKey() {
         // Key Query
         rotateCollection();
         Document query = new Document();
@@ -374,7 +363,7 @@ public class MongoWorker implements Runnable {
         // Key Query
         rotateCollection();
         Document query = new Document();
-        List<String> projFields = new ArrayList<String>(testOpts.numFields);
+        List<String> projFields = new ArrayList<>(testOpts.numFields);
         int recordno = getNextVal(sequence);
         query.append("_id", new Document("$gt", new Document("w", workerID).append("i", recordno)));
         Date starttime = new Date();
@@ -382,8 +371,7 @@ public class MongoWorker implements Runnable {
         if (testOpts.projectFields == 0) {
             cursor = coll.find(query).limit(testOpts.rangeDocs).iterator();
         } else {
-            int numProjFields = (testOpts.projectFields <= testOpts.numFields) ? testOpts.projectFields
-                    : testOpts.numFields;
+            int numProjFields = Math.min(testOpts.projectFields, testOpts.numFields);
             int i = 0;
             while (i < numProjFields) {
                 projFields.add("fld" + i);
@@ -443,10 +431,10 @@ public class MongoWorker implements Runnable {
             query.append("_id", key);
         }
 
-        int updateFields = (testOpts.updateFields <= testOpts.numFields) ? testOpts.updateFields : testOpts.numFields;
+        int updateFields = Math.min(testOpts.updateFields, testOpts.numFields);
 
         if (updateFields == 1) {
-            long changedfield = (long) getNextVal((int) testOpts.NUMBER_SIZE);
+            long changedfield = getNextVal((int) testOpts.NUMBER_SIZE);
             Document fields = new Document("fld0", changedfield);
             change = new Document("$set", fields);
         } else {
@@ -456,15 +444,11 @@ public class MongoWorker implements Runnable {
         }
 
         if (!testOpts.findandmodify) {
-            bulkWriter.add(new UpdateManyModel<Document>(query, change));
+            bulkWriter.add(new UpdateManyModel<>(query, change));
         } else {
             this.coll.findOneAndUpdate(query, change); // These are immediate not batches
         }
         testResults.RecordOpsDone("updates", 1);
-    }
-    
-    private void incrementSingleRecord(List<WriteModel<Document>> bulkWriter) {
-        incrementSingleRecord(bulkWriter, null);
     }
 
     private void incrementSingleRecord(List<WriteModel<Document>> bulkWriter, Document key) {
@@ -484,14 +468,12 @@ public class MongoWorker implements Runnable {
             query.append("_id", key);
         }
 
-        int updateFields = (testOpts.updateFields <= testOpts.numFields) ? testOpts.updateFields : testOpts.numFields;
-
         Document fields = new Document("fld0", 1);
         change = new Document("$inc", fields);
 
 
         if (!testOpts.findandmodify) {
-            bulkWriter.add(new UpdateManyModel<Document>(query, change));
+            bulkWriter.add(new UpdateManyModel<>(query, change));
         } else {
             this.coll.findOneAndUpdate(query, change); // These are immediate not batches
         }
@@ -508,7 +490,7 @@ public class MongoWorker implements Runnable {
 
     private TestRecord insertNewRecord(List<WriteModel<Document>> bulkWriter) {
         TestRecord tr = createNewRecord();
-        bulkWriter.add(new InsertOneModel<Document>(tr.internalDoc));
+        bulkWriter.add(new InsertOneModel<>(tr.internalDoc));
         return tr;
     }
 
@@ -517,11 +499,11 @@ public class MongoWorker implements Runnable {
         List<WriteModel<Document>> bulkWriter;
 
         try {
-            bulkWriter = new ArrayList<WriteModel<Document>>();
+            bulkWriter = new ArrayList<>();
             int bulkops = 0;
 
             int c = 0;
-            logger.debug("Worker thread " + workerID + " Started.");
+            logger.debug("Worker thread {} Started.", workerID);
             while (testResults.GetSecondsElapsed() < testOpts.duration) {
                 c++;
                 // Timer isn't granullar enough to sleep for each
@@ -571,43 +553,51 @@ public class MongoWorker implements Runnable {
                     // Following a preset workflow
                     String wfop = workflow.substring(workflowStep, workflowStep + 1);
 
-                    logger.debug("Executing workflow op [" + workflow + "] " + wfop);
-                    if (wfop.equals("i")) {
-                        // Insert a new record, push it's key onto our stack
-                        TestRecord r = insertNewRecord(bulkWriter);
-                        keyStack.add((Document) r.internalDoc.get("_id"));
-                        bulkops++;
-                        logger.debug("Insert");
-                    } else if (wfop.equals("u")) {
-                        if (keyStack.size() > 0) {
-                            updateSingleRecord(bulkWriter, keyStack.get(keyStack.size() - 1));
-                            logger.debug("Update");
-                            if (!testOpts.findandmodify)
-                                bulkops++;
+                    logger.debug("Executing workflow op [{}] {}", workflow, wfop);
+                    switch (wfop) {
+                        case "i": {
+                            // Insert a new record, push it's key onto our stack
+                            TestRecord r = insertNewRecord(bulkWriter);
+                            keyStack.add((Document) r.internalDoc.get("_id"));
+                            bulkops++;
+                            logger.debug("Insert");
+                            break;
                         }
-                    } else if (wfop.equals("I")) {
-                        if (keyStack.size() > 0) {
-                            incrementSingleRecord(bulkWriter, keyStack.get(keyStack.size() - 1));
-                            logger.debug("Increment");
-                            if (!testOpts.findandmodify)
-                                bulkops++;
-                        }		     
-                    } else if (wfop.equals("p")) {
-                        // Pop the top thing off the stack
-                        if (keyStack.size() > 0) {
-                            keyStack.remove(keyStack.size() - 1);
+                        case "u":
+                            if (!keyStack.isEmpty()) {
+                                updateSingleRecord(bulkWriter, keyStack.get(keyStack.size() - 1));
+                                logger.debug("Update");
+                                if (!testOpts.findandmodify)
+                                    bulkops++;
+                            }
+                            break;
+                        case "I":
+                            if (!keyStack.isEmpty()) {
+                                incrementSingleRecord(bulkWriter, keyStack.get(keyStack.size() - 1));
+                                logger.debug("Increment");
+                                if (!testOpts.findandmodify)
+                                    bulkops++;
+                            }
+                            break;
+                        case "p":
+                            // Pop the top thing off the stack
+                            if (!keyStack.isEmpty()) {
+                                keyStack.remove(keyStack.size() - 1);
+                            }
+                            break;
+                        case "k": {
+                            // Find a new record and put it on the stack
+                            Document r = simpleKeyQuery();
+                            if (r != null) {
+                                keyStack.add((Document) r.get("_id"));
+                            }
+                            break;
                         }
-                    } else if (wfop.equals("k")) {
-                        // Find a new record an put it on the stack
-                        Document r = simpleKeyQuery();
-                        if (r != null) {
+                        case "K": {
+                            // Get a new _id but don't read the doc and put it on the stack
+                            Document r = simpleGetKey();
                             keyStack.add((Document) r.get("_id"));
-                        }
-                    } else if (wfop.equals("K")) {
-                        // Get a new _id but don't read the doc and put it on the stack
-                        Document r = simpleGetKey();
-                        if (r != null) {
-                            keyStack.add((Document) r.get("_id"));
+                            break;
                         }
                     }
 
@@ -615,7 +605,7 @@ public class MongoWorker implements Runnable {
                     workflowStep++;
                     if (workflowStep >= workflow.length()) {
                         workflowStep = 0;
-                        keyStack = new ArrayList<Document>();
+                        keyStack = new ArrayList<>();
                     }
                 }
 
@@ -634,7 +624,7 @@ public class MongoWorker implements Runnable {
             }
 
         } catch (Exception e) {
-            logger.warn("Error: " + e.getMessage());
+            logger.warn("Error: {}", e.getMessage());
             if (testOpts.debug)
                 e.printStackTrace();
         }

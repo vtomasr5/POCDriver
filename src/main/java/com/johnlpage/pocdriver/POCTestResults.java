@@ -1,25 +1,24 @@
 package com.johnlpage.pocdriver;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Date;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 public class POCTestResults {
 
+    public static String[] opTypes = {"inserts", "keyqueries", "updates", "rangequeries"};
+    private final Date startTime;
+    private final ConcurrentHashMap<String, POCopStats> opStats;
     /**
      * The time this LoadRunner started
      */
     Logger logger;
-    private Date startTime;
-    private Date lastIntervalTime;
     long initialCount;
-
-    public static String[] opTypes = {"inserts", "keyqueries", "updates", "rangequeries"};
-    private ConcurrentHashMap<String, POCopStats> opStats;
+    private Date lastIntervalTime;
 
 
     POCTestResults(POCTestOptions testOptions) {
@@ -32,8 +31,8 @@ public class POCTestResults {
 
         for (String s : opTypes) {
             POCopStats stats = new POCopStats();
-            stats.slowOps = new AtomicLong[ testOptions.slowThresholds.length];            
-            for(int i =0; i< testOptions.slowThresholds.length; i++){
+            stats.slowOps = new AtomicLong[testOptions.slowThresholds.length];
+            for (int i = 0; i < testOptions.slowThresholds.length; i++) {
                 stats.slowOps[i] = new AtomicLong();
             }
             opStats.put(s, stats);
@@ -48,7 +47,7 @@ public class POCTestResults {
         HashMap<String, Long> rval = new HashMap<String, Long>();
 
         Date now = new Date();
-        Long milliSecondsSinceLastCheck = now.getTime() - lastIntervalTime.getTime();
+        long milliSecondsSinceLastCheck = now.getTime() - lastIntervalTime.getTime();
 
         for (String s : opTypes) {
             Long opsNow = GetOpsDone(s);
@@ -84,22 +83,22 @@ public class POCTestResults {
         return os.totalOpsDone.get();
     }
 
-    
+
     public Long GetSlowOps(String opType, int thresholdIndex) {
         POCopStats os = opStats.get(opType);
         return os.slowOps[thresholdIndex].get();
     }
 
     public void RecordSlowOp(String opType, int number, int thresholdIndex) {
-        POCopStats os = opStats.get(opType);        
+        POCopStats os = opStats.get(opType);
         os.slowOps[thresholdIndex].addAndGet(number);
-        
+
     }
 
     public void RecordOpsDone(String opType, int howmany) {
         POCopStats os = opStats.get(opType);
         if (os == null) {
-            logger.warn("Cannot fetch opstats for " + opType);
+            logger.warn("Cannot fetch opstats for {}", opType);
         } else {
             os.totalOpsDone.addAndGet(howmany);
         }

@@ -1,4 +1,7 @@
 .settings
 *.class
 target/
-
+build/
+.gradle
+.idea
+.vscode
