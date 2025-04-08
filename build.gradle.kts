@@ -30,16 +30,16 @@ repositories {
 }
 
 dependencies {
-    implementation("ch.qos.logback:logback-classic:1.4.12")
-    implementation("org.mongodb:mongodb-driver-sync:4.11.4")
-    implementation("commons-cli:commons-cli:1.4")
-    implementation("commons-codec:commons-codec:1.15")
-    implementation("com.google.code.gson:gson:2.8.9")
-    implementation("de.sven-jacobs:loremipsum:1.0")
-    implementation("org.apache.commons:commons-math3:3.6.1")
-    implementation("org.xerial.snappy:snappy-java:1.1.10.4")
-    implementation("com.github.luben:zstd-jni:1.4.9-1")
-    testImplementation("junit:junit:4.13.2")
+    implementation(libs.logback.classic)
+    implementation(libs.mongodb.driver.sync)
+    implementation(libs.commons.cli)
+    implementation(libs.commons.codec)
+    implementation(libs.gson)
+    implementation(libs.loremipsum)
+    implementation(libs.commons.math3)
+    implementation(libs.snappy.java)
+    implementation(libs.zstd)
+    testImplementation(libs.junit)
 }
 
 tasks {

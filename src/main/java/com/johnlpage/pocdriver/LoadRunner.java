@@ -167,7 +167,10 @@ public class LoadRunner {
         testexec.shutdown();
 
         try {
-            testexec.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
+            boolean termination = testexec.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
+            if (!termination) {
+                logger.error("Threads did not terminate");
+            }
             logger.info("All Threads Complete");
             executor.shutdown();
         } catch (InterruptedException e) {

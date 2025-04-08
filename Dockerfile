@@ -7,4 +7,4 @@ RUN gradle clean build
 FROM eclipse-temurin:11
 COPY --from=build_img /usr/src/app/build/libs /javabin
 WORKDIR /javabin
-ENTRYPOINT [ "java", "-jar", "/javabin/poc-driver-0.2-SNAPSHOT-all.jar" ]
+ENTRYPOINT [ "java", "-jar", "/javabin/POCDriver.jar" ]
