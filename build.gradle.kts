@@ -7,7 +7,7 @@
 plugins {
     java
     application
-    id("com.gradleup.shadow") version "8.3.4"
+    id("com.gradleup.shadow") version "8.3.6"
 }
 
 group="org.mongodb"
