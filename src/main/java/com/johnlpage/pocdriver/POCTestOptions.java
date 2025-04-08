@@ -100,7 +100,7 @@ public class POCTestOptions {
 
         cliopt.addOption(null, "ordered", true, "Use ordered or unordered batches");
 
-        cliopt.addOption(null, "opratio", false, "Maintain a strict ratio of number of ops not time - legacy mode");
+        cliopt.addOption(null, "opsratio", false, "Maintain a strict ratio of number of ops not time - legacy mode");
         cliopt.addOption(null, "location", true, "Adds a location field in the payload ( agrs : comma,seperated,list,of,country,code,)");
 
 
